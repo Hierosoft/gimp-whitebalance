@@ -60,3 +60,5 @@
 - 2018-07-23 <http://gimpchat.com/viewtopic.php?f=9&t=16699#p229884>
   - Has GIMP 2.9.5 update (included as release 2.9.5.0 in this repo) edited by dinasset.
   - Discusses dinasset's filter mentioned under "Related Projects" (which may be more technically valid than the colortemp script) and shows examples.
+- 2023-10-11 [How to make my images have the same temperature/black point/white point? How to align ruler between photos?](https://www.reddit.com/r/GIMP/comments/175bljy/how_to_make_my_images_have_the_same/)
+  - A comment mentions the whitebalance script, but not the colortemp script
