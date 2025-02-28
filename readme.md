@@ -1,5 +1,5 @@
 # gimp-whitebalance
-(not to be confused with [gimp-colortemp](https://github.com/Hierosoft/gimp-colortemp)
+(not to be confused with [gimp-colortemp](https://github.com/Hierosoft/gimp-colortemp))
 
 
 ## Documentation
