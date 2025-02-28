@@ -4,7 +4,8 @@
 ;
 ; Last changed: Feb 26, 2009
 ;
-; Copyright (C) 2006-2009 Luca de Alfaro <lda@dealfaro.org>
+; Copyright (C) 2006-2009 Luca de Alfaro <lda@dealfaro.org>,
+;   2018 dinasset
 ;
 ; With many thanks to Martin Rogge <marogge@onlinehome.de>, 
 ; from whose grey-point script this is inspired. 
@@ -136,9 +137,9 @@
 	   (aset blue-curve  i (lin-mult-in-gamma-space i bratio))
 	   (set! i (+ i 1)))
 
-    (gimp-curves-explicit drawable RED-LUT   num_bytes red-curve  )
-    (gimp-curves-explicit drawable GREEN-LUT num_bytes green-curve)
-    (gimp-curves-explicit drawable BLUE-LUT  num_bytes blue-curve )
+    (gimp-curves-explicit drawable HISTOGRAM-RED   num_bytes red-curve  )
+    (gimp-curves-explicit drawable HISTOGRAM-GREEN num_bytes green-curve)
+    (gimp-curves-explicit drawable HISTOGRAM-BLUE  num_bytes blue-curve )
 
     (gimp-hue-saturation drawable 0 0.0 0.0 satura)
 
@@ -164,4 +165,3 @@
 
 (script-fu-menu-register "script-fu-whitebalance"
 			 _"<Image>/Filters/Colors")
-
