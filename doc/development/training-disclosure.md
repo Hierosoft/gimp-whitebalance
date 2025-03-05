@@ -63,7 +63,7 @@ Traceback (most recent call last):
   File "/home/owner/.config/GIMP/3.0/plug-ins/whitebalance/whitebalance.py", line 68, in plugin_main
     adjust_white_balance(image, drawables)
   File "/home/owner/.config/GIMP/3.0/plug-ins/whitebalance/whitebalance.py", line 39, in adjust_white_balance
-    levels_proc.run([
+    procedure.run([
     ^^^^^^^^^^^^^^^
 AttributeError: 'NoneType' object has no attribute 'run'
 
