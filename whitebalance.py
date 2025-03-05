@@ -1,65 +1,58 @@
 #!/usr/bin/env python3
 
+import logging
+import os
+import sys
+
 import gi
 
+# Must use require before import:
 gi.require_version('Gimp', '3.0')
 # gi.require_version('GimpUi', '3.0')
 # gi.require_version('Gegl', '0.4')  # See https://github.com/GNOME/gimp/blob/095727b0746262bc1cf30e1f1994f81288280edc/plug-ins/python/foggify.py#L22C1-L23C1
 
-from gi.repository import (
+
+from gi.repository import (  # noqa: E402  (must require version before import)
     Gimp,
-    # Gegl,
+    Gegl,
     # GimpUi,
     # GLib,
     # GObject,
 )
 
+logging.basicConfig(level=logging.INFO)
+
+MY_NAME = os.path.split(__file__)[1]
+
+logger = logging.getLogger(MY_NAME)  # Don't use __name__ since "__main__" run by GIMP
 
 
-
-import sys
-
-def adjust_white_balance(image, drawable):
+def adjust_white_balance(image, drawable, add_undo=False, stretch_mode='add',
+                         progress_portion=None, progress_offset=None):
     """Adjust white balance relative to the currently selected foreground color."""
+    logger.info("adjust_white_balance...")
     pdb = Gimp.get_pdb()
 
+    logger.info("context_get_foreground...")
     # Get the current foreground color
     fg_color = Gimp.context_get_foreground()
-    r, g, b, _ = fg_color.get_rgba()
+    logger.info("get_rgba...")
+    brush_rgba = fg_color.get_rgba()
+    r, g, b, _ = brush_rgba
 
-    # Compute the average of the RGB components
-    avg = (r + g + b) / 3.0
+    logger.info("fg_color.get_rgba()={}".format(fg_color.get_rgba()))
 
-    # Compute the adjustments
-    adjust_r = avg - r
-    adjust_g = avg - g
-    adjust_b = avg - b
-    # proc_name = gimp_drawable_levels  # apparently for GIMP 2.x only
-    # available_procedures = pdb.query_procedures()
-    # ^ expects 9 arguments, 1 given
-    #!/usr/bin/env python3
+    # baseline = (r + g + b) / 3.0  # add diff of average loses light detail
+    # prefer losing dark details (add a negative if target higher than channel)
+    # - detail loss can be avoided using only input in gimp-drawable-levels
+    target_gray = min(r, g, b)
 
-import gi
-gi.require_version('Gimp', '3.0')
-
-from gi.repository import Gimp
-import sys
-
-def adjust_white_balance(image, drawable):
-    """Adjust white balance relative to the currently selected foreground color."""
-    pdb = Gimp.get_pdb()
-
-    # Get the current foreground color
-    fg_color = Gimp.context_get_foreground()
-    r, g, b, _ = fg_color.get_rgba()
-
-    # Compute the average of the RGB components
-    avg = (r + g + b) / 3.0
-
-    # Compute the adjustments
-    adjust_r = avg - r
-    adjust_g = avg - g
-    adjust_b = avg - b
+    # Compute the adjustments. Subtracting a potentially bigger num is
+    #   negative (prefer losing detail in dark areas instead of light
+    #   areas)
+    adjust_r = target_gray - r
+    adjust_g = target_gray - g
+    adjust_b = target_gray - b
 
     # proc_name = "gimp_drawable_levels"  # for GIMP 2.x?
     #   2.x used "gimp-levels" it seems in
@@ -71,6 +64,7 @@ def adjust_white_balance(image, drawable):
     # print("pdb.query_procedures.__doc__=%s" % pdb.query_procedures.__doc__):
     #   self, name:str, blurb:str, help:str, help_id:str, authors:str,
     #   copyright:str, date:str, proc_type:str
+    logger.info("query_procedures...")
     available_procedures = pdb.query_procedures(
         "",        # name
         "",        # blurb
@@ -79,8 +73,9 @@ def adjust_white_balance(image, drawable):
         "",        # authors
         "",        # copyright
         "",        # date
-        "PLUGIN",  # proc_type
+        "",  # proc_type (NOTE: "PLUGIN" returns nothing)
     )
+    logger.info("{} in available_procedures ?...".format(proc_name))
     if proc_name not in available_procedures:
         Gimp.message(
             "Error: '{}' not found in PDB! Got:"
@@ -91,7 +86,8 @@ def adjust_white_balance(image, drawable):
             # break
         print()
         return
-    levels_proc = pdb.lookup_procedure(proc_name)
+    logger.info("pdb.lookup_procedure({})...".format(proc_name))
+    procedure = pdb.lookup_procedure(proc_name)
     try:
         # Apply levels adjustment to shift colors
         # Example from
@@ -99,26 +95,115 @@ def adjust_white_balance(image, drawable):
         #   [mask, Gimp.HistogramChannel.VALUE,  #drawable, channel
         #    level_min, level_max, True, 1.0,  #input min, max, clamp, gamma
 		#    0.0, 1.0, False]
-        result = levels_proc.run([
-            drawable,
-            0,  # Channel (RGB)
-            0.0, 1.0, True, 1.0, # input: min, max, clamp, gamma
-            # Output levels:
-            0 + adjust_r, 255 + adjust_r,
-            0 + adjust_g, 255 + adjust_g,
-            0 + adjust_b, 255 + adjust_b,
-        ])
-        if result is not None:
+
+        # result = procedure.run([
+        #     drawable,
+        #     0,  # Channel (RGB)
+        #     0.0, 1.0, True, 1.0, # input: min, max, clamp, gamma
+        #     # Output levels:
+        #     0 + adjust_r, 255 + adjust_r,
+        #     0 + adjust_g, 255 + adjust_g,
+        #     0 + adjust_b, 255 + adjust_b,
+        # ])
+        # ^ (whitebalance.py:114766): LibGimp-WARNING **: 14:33:40.324: _gimp_procedure_run_array: no return values, shouldn't happen
+        # /home/owner/.config/GIMP/3.0/plug-ins/whitebalance/whitebalance.py:171: Warning: g_error_new: assertion 'domain != 0' failed
+        #   Gimp.main(WhiteBalanceBrush.__gtype__, sys.argv)
+        # so as per
+        # <https://github.com/cam92473/diffuse-dwarf-detection/blob/cc5b4a9c2f45a50064087c3d800398d18aa52607/ALGORITHM/IMAGE_PROCESS/gimp_procedure/gimp_procedure.py#L199>:
+        logger.info("procedure.create_config()...")
+        config = procedure.create_config()
+        adjustments = (adjust_r, adjust_g, adjust_b)
+
+        logger.info("adjustments={}".format(adjustments))
+        # print("dir(Gimp.HistogramChannel)=%s" % (dir(Gimp.HistogramChannel)))
+        # ^ 'ALPHA', 'BLUE', 'GREEN', 'LUMINANCE', 'RED', 'VALUE'
+        channels = (
+            Gimp.HistogramChannel.RED,
+            Gimp.HistogramChannel.GREEN,
+            Gimp.HistogramChannel.BLUE,
+        )
+
+        scales = []
+        for i in range(len(channels)):
+            scales.append(target_gray / brush_rgba[i])
+
+        ok_count = 0
+        # Doesn't work (does opposite)--reason unknown:
+        # for i in range(len(channels)):
+        #     adjust = adjustments[i]
+        #     channel = channels[i]
+        #     config.set_property('drawable', drawable)
+        #     config.set_property('channel', channel)
+        #     config.set_property('low-input', 0.0)
+        #     config.set_property('high-input', 1.0)
+        #     config.set_property('clamp-input', False)
+        #     config.set_property('gamma', 1.0)
+        #     config.set_property('low-output', 0.0)
+        #     config.set_property('high-output', 1.0 + adjust)
+        #     config.set_property('clamp-output', False)
+        #     logger.info("procedure.run(config)...")
+        #     result = procedure.run(config)
+
+        #     if result is None:
+        #         Gimp.message("Levels adjustment failed, no result returned.")
+        #         break
+        #     ok_count += 1
+        new_color = Gegl.Color.new("#FFFF")
+        size = drawable.get_width(), drawable.get_height()
+        w, h = size
+        print("size={}".format(size))
+        for y in range(h):
+            ratio = y / h
+            if progress_portion is not None:
+                ratio *= progress_portion
+            if progress_offset is not None:
+                ratio += progress_offset
+            Gimp.progress_update(ratio)
+            for x in range(w):
+                color = drawable.get_pixel(x, y)
+                rgba = color.get_rgba()  # returns _ResultTuple
+                new_rgba = []
+                lightness = (rgba[0] + rgba[1] + rgba[2]) / 3
+                for i in range(len(rgba)):
+                    if i < len(channels):
+                        if stretch_mode == "proportional":
+                            new_rgba.append(
+                                rgba[i]
+                                + adjustments[i] * lightness
+                            )
+                            if new_rgba[i] < 0:
+                                new_rgba[i] = 0
+                        elif stretch_mode == "multiply":
+                            new_rgba.append(rgba[i] * scales[i])
+                            if new_rgba[i] < 0:
+                                new_rgba[i] = 0
+                            elif new_rgba[i] > 1.0:
+                                new_rgba[i] = 1.0
+                        elif stretch_mode == "add":
+                            new_rgba.append(rgba[i] + adjustments[i])
+                            if new_rgba[i] < 0:
+                                new_rgba[i] = 0
+                        else:
+                            raise ValueError(
+                                "unknown stretch_mode={}".format(stretch_mode))
+                    else:  # keep existing alpha
+                        new_rgba.append(rgba[i])
+                new_color.set_rgba(new_rgba[0], new_rgba[1], new_rgba[2], new_rgba[3])
+                drawable.set_pixel(x, y, new_color)
+                # logger.debug("{} became {}".format(rgba, new_rgba))
+
+        logger.info("Adjusted {} channel(s)".format(ok_count))
+        if ok_count == len(channels):
             Gimp.message("Levels adjustment completed.")
-        else:
-            Gimp.message("Levels adjustment failed, no result returned.")
+        # else exception should have been shown.
+        Gimp.message("White balance adjusted relative to the foreground color.")
     except Exception as e:
         Gimp.message(f"Error running procedure: {str(e)}")
+        raise
 
     # Ensure the layer is updated
-    drawable.update(0, 0, drawable.width, drawable.height)
+    drawable.update(0, 0, drawable.get_width(), drawable.get_height())
 
-    Gimp.message("White balance adjusted relative to the foreground color.")
 
 
 # (procedure, run_mode, image, drawables, config, run_data):  # See https://gitlab.gnome.org/GNOME/gimp/-/blame/master/extensions/goat-exercises/goat-exercise-py3.py#L57
@@ -133,7 +218,29 @@ def plugin_main(procedure, run_mode, image, drawables, config, run_data):
     #   <class 'NoneType'>
     # ]
     # print(type(drawables[0]))  # : <class 'gi.repository.Gimp.Layer'>
-    adjust_white_balance(image, drawables)
+    image.undo_group_start()
+    Gimp.context_push()
+    progress_offset = 0
+    progress_portion = 1 / len(drawables)
+    layer_n = 0
+    for drawable in drawables:
+        layer_n += 1
+        Gimp.progress_init(
+            "This may take a while (layer {} of {})..."
+            .format(layer_n, len(drawables)))
+        adjust_white_balance(
+            image,
+            drawable,
+            progress_offset=progress_offset,
+            progress_portion=progress_portion,
+        )
+        progress_offset += progress_portion
+
+    Gimp.displays_flush()
+
+    Gimp.progress_update(1.0)
+    Gimp.context_pop()
+    image.undo_group_end()
 
 
 class WhiteBalanceBrush(Gimp.PlugIn):
@@ -147,7 +254,7 @@ class WhiteBalanceBrush(Gimp.PlugIn):
         return ["python-fu-white-balance-brush"]
 
     def do_create_procedure(self, name):
-        # Gegl.init(None)
+        Gegl.init(None)
         # if name == "python-fu-white-balance-brush":
         procedure = Gimp.ImageProcedure.new(
             self,
