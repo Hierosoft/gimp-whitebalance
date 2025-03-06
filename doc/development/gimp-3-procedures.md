@@ -1,3 +1,22 @@
+# GIMP 3.0 RC2 Procedures
+
+## gimp-drawable-levels
+```
+print("config.list_properties()={}"
+      .format(config.list_properties()))
+[<GParamObject 'procedure'>,
+ <GParamObject 'drawable'>,
+ <GParamEnum 'channel'>,
+ <GParamDouble 'low-input'>,
+ <GParamDouble 'high-input'>,
+ <GParamBoolean 'clamp-input'>,
+ <GParamDouble 'gamma'>,
+ <GParamDouble 'low-output'>,
+ <GParamDouble 'high-output'>,
+ <GParamBoolean 'clamp-output'>]
+```
+
+## All included procedures
 - gimp-context-get-transform-direction
 - gimp-floating-sel-remove
 - gimp-image-scale

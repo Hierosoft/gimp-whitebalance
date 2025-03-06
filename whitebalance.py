@@ -9,28 +9,34 @@ import gi
 
 # Must use require before import:
 gi.require_version('Gimp', '3.0')
-# gi.require_version('GimpUi', '3.0')
+gi.require_version('GimpUi', '3.0')
 # gi.require_version('Gegl', '0.4')  # See https://github.com/GNOME/gimp/blob/095727b0746262bc1cf30e1f1994f81288280edc/plug-ins/python/foggify.py#L22C1-L23C1
 
 
 from gi.repository import (  # noqa: E402  (must require version before import)
     Gimp,
     Gegl,
-    # GimpUi,
-    # GLib,
-    # GObject,
+    GimpUi,
+    GLib,
+    GObject,
 )
 
-logging.basicConfig(level=logging.INFO)
+# logging.basicConfig(level=logging.INFO)
 
 MY_NAME = os.path.split(__file__)[1]
 
 logger = logging.getLogger(MY_NAME)  # Don't use __name__ since "__main__" run by GIMP
 
 
-def adjust_white_balance(image, drawable, stretch_mode="levels",
+def adjust_white_balance(image, drawable, plugin_config, stretch_mode="levels",
                          progress_portion=None, progress_offset=None):
-    """Adjust white balance relative to the currently selected foreground color."""
+    """Adjust white balance relative to the currently selected foreground color.
+
+    If called from the GIMP plugin, caller must:
+    - start and end undo group if applicable
+    - push and pop context if applicable
+    - return procedure.new_return_values(Gimp.PDBStatusType.SUCCESS, GLib.Error())
+    """
     logger.info("adjust_white_balance...")
     pdb = Gimp.get_pdb()
 
@@ -48,12 +54,13 @@ def adjust_white_balance(image, drawable, stretch_mode="levels",
     # - detail loss can be avoided using only input in gimp-drawable-levels
     target_gray = min(r, g, b)
 
+    amount = plugin_config.get_property("amount")  # (1.0 should be "correct")
     # Compute the adjustments. Subtracting a potentially bigger num is
     #   negative (prefer losing detail in dark areas instead of light
     #   areas)
-    adjust_r = target_gray - r
-    adjust_g = target_gray - g
-    adjust_b = target_gray - b
+    adjust_r = (target_gray - r) * amount
+    adjust_g = (target_gray - g) * amount
+    adjust_b = (target_gray - b) * amount
 
     # proc_name = "gimp_drawable_levels"  # for GIMP 2.x?
     #   2.x used "gimp-levels" it seems in
@@ -112,8 +119,8 @@ def adjust_white_balance(image, drawable, stretch_mode="levels",
         # so as per
         # <https://github.com/cam92473/diffuse-dwarf-detection/blob/cc5b4a9c2f45a50064087c3d800398d18aa52607/ALGORITHM/IMAGE_PROCESS/gimp_procedure/gimp_procedure.py#L199>:
         logger.info("procedure.create_config()...")
-        config = procedure.create_config()
-        logger.info("config is a {}".format(type(config)))
+
+        # logger.info("config is {}".format(type(config))) #GimpProcedureConfig
         adjustments = (adjust_r, adjust_g, adjust_b)
 
         logger.info("adjustments={}".format(adjustments))
@@ -127,32 +134,54 @@ def adjust_white_balance(image, drawable, stretch_mode="levels",
 
         low_dist = target_gray
         high_dist = 1.0 - target_gray
-
         scales = []
-        for i in range(len(channels)):
-            scales.append(target_gray / brush_rgba[i])
-        r_scale, g_scale, b_scale = scales
+        if stretch_mode == "multiply":
+            for i in range(len(channels)):
+                if brush_rgba[i] > 0:
+                    scales.append(target_gray / brush_rgba[i])
+                else:
+                    Gimp.message(
+                        "Error running procedure: Can't use 'multiply'"
+                        " mode if R, G, or B is 0.")
+                    # Ensure the layer is updated
+                    drawable.update(0, 0, drawable.get_width(), drawable.get_height())
+                    return
+                    scales.append(target_gray)
+            r_scale, g_scale, b_scale = scales
         ok_count = 0
         if stretch_mode == "levels":
             for i in range(len(channels)):
+                config = procedure.create_config()
                 adjust = adjustments[i]
                 channel = channels[i]
-                # print("dir(config)={}".format(dir(config)))
-                # ^ 'bind_property', 'bind_property_full', 'build_data_path', 'build_plug_in_path', 'build_system_path', 'build_writable_path', 'chain', 'compat_control', 'connect', 'connect_after', 'connect_data', 'connect_object', 'connect_object_after', 'deserialize_return', 'diff', 'disconnect', 'disconnect_by_func', 'emit', 'emit_stop_by_name', 'error_quark', 'find_property', 'force_floating', 'freeze_notify', 'g_type_instance', 'get_choice_id', 'get_color_array', 'get_core_object_array', 'get_data', 'get_procedure', 'get_properties', 'get_property', 'get_qdata', 'getv', 'handler_block', 'handler_block_by_func', 'handler_disconnect', 'handler_is_connected', 'handler_unblock', 'handler_unblock_by_func', 'install_properties', 'install_property', 'interface_find_property', 'interface_install_property', 'interface_list_properties', 'is_floating', 'list_properties', 'newv', 'notify', 'notify_by_pspec', 'override_property', 'param_spec_duplicate', 'parent_instance', 'props', 'qdata', 'ref', 'ref_count', 'ref_sink', 'replace_data', 'replace_qdata', 'reset_properties', 'reset_property', 'run_dispose', 'save_metadata', 'serialize_value', 'set_color_array', 'set_core_object_array', 'set_data', 'set_properties', 'set_property', 'steal_data', 'steal_qdata', 'stop_emission', 'stop_emission_by_name', 'string_append_escaped', 'sync', 'thaw_notify', 'type_register', 'unref', 'watch_closure', 'weak_ref'
                 # TODO: report issue: no __doc__ for get_properties
-                # print("config.list_properties()={}"
-                #       .format(config.list_properties()))
-                # ^ [<GParamObject 'procedure'>, <GParamObject 'drawable'>, <GParamEnum 'channel'>, <GParamDouble 'low-input'>, <GParamDouble 'high-input'>, <GParamBoolean 'clamp-input'>, <GParamDouble 'gamma'>, <GParamDouble 'low-output'>, <GParamDouble 'high-output'>, <GParamBoolean 'clamp-output'>]
+                # All properties of gimp-drawable-levels: See
+                #   gimp-3-procedures.md
                 config.set_property('drawable', drawable)
                 config.set_property('channel', channel)
-                config.set_property('low-input', 0.0)
+                # config.set_property('low-input', 0.0)
+                if plugin_config.get_property("enable_low"):
+                    config.set_property('low-input', 0 - adjust)
+                    # ^ subtracting negative, so positive--trim darkest
+                    #   details
+                else:
+                    config.set_property('low-input', 0)
                 config.set_property('high-input', 1.0)
                 config.set_property('clamp-input', False)
-                config.set_property('gamma', 1.0)
                 config.set_property('low-output', 0.0)
-                # config.set_property('gamma', 1.0 + adjust)  # bad with or without high-output change
-                config.set_property('high-output', 1.0 + adjust)
+                if plugin_config.get_property("enable_gamma"):
+                    config.set_property('gamma', 1.0 + adjust)
+                    # Seems wrong with or without high-output change
+                    # (Therefore user may adjust amount if using gamma).
+                else:
+                    config.set_property('gamma', 1.0)
+                if plugin_config.get_property("enable_high"):
+                    config.set_property('high-output', 1.0 + adjust)
+                else:
+                    # Defaults to 0, so:
+                    config.set_property('high-output', 1.0)
                 config.set_property('clamp-output', False)
+
                 logger.info("procedure.run(config)...")
                 result = procedure.run(config)
 
@@ -164,18 +193,16 @@ def adjust_white_balance(image, drawable, stretch_mode="levels",
         new_color = Gegl.Color.new("#FFFF")
         size = drawable.get_width(), drawable.get_height()
         w, h = size
-        print("size={}".format(size))
-        new_rgba = [1.0, 1.0, 1.0, 1.0]
-        change_len = 3
+        logger.info("size={}".format(size))
 
         def wb_pyramid(color):
             r, g, b, a = color.get_rgba()
             lightness = (r + g + b) / 3
-            amount = lightness / low_dist if (lightness <= target_gray) else ((1 - lightness) / high_dist)
+            proportion = lightness / low_dist if (lightness <= target_gray) else ((1 - lightness) / high_dist)
             new_color.set_rgba(
-                max(r + adjust_r * amount, 0),
-                max(g + adjust_g * amount, 0),
-                max(b + adjust_b * amount, 0),
+                max(r + adjust_r * proportion, 0),
+                max(g + adjust_g * proportion, 0),
+                max(b + adjust_b * proportion, 0),
                 a,
             )
             return new_color
@@ -245,8 +272,8 @@ def adjust_white_balance(image, drawable, stretch_mode="levels",
         Gimp.message("White balance adjusted relative to the foreground color.")
     except Exception as e:
         Gimp.message(f"Error running procedure: {str(e)}")
+        drawable.update(0, 0, drawable.get_width(), drawable.get_height())
         raise
-
     # Ensure the layer is updated
     drawable.update(0, 0, drawable.get_width(), drawable.get_height())
 
@@ -254,6 +281,17 @@ def adjust_white_balance(image, drawable, stretch_mode="levels",
 
 # (procedure, run_mode, image, drawables, config, run_data):  # See https://gitlab.gnome.org/GNOME/gimp/-/blame/master/extensions/goat-exercises/goat-exercise-py3.py#L57
 def plugin_main(procedure, run_mode, image, drawables, config, run_data):
+    if run_mode == Gimp.RunMode.INTERACTIVE:
+        # See https://github.com/GNOME/gimp/blob/095727b0746262bc1cf30e1f1994f81288280edc/plug-ins/python/foggify.py#L33
+        GimpUi.init(procedure.get_name())
+        dialog = GimpUi.ProcedureDialog(procedure=procedure, config=config)
+        dialog.fill(None)
+        if not dialog.run():
+            dialog.destroy()
+            return procedure.new_return_values(Gimp.PDBStatusType.CANCEL, GLib.Error())
+        else:
+            dialog.destroy()
+
     # print([type(arg) for arg in args]):
     # [
     #   <class 'gi.repository.Gimp.ImageProcedure'>,
@@ -277,6 +315,7 @@ def plugin_main(procedure, run_mode, image, drawables, config, run_data):
         adjust_white_balance(
             image,
             drawable,
+            config,
             progress_offset=progress_offset,
             progress_portion=progress_portion,
         )
@@ -287,7 +326,7 @@ def plugin_main(procedure, run_mode, image, drawables, config, run_data):
     Gimp.progress_update(1.0)
     Gimp.context_pop()
     image.undo_group_end()
-
+    return procedure.new_return_values(Gimp.PDBStatusType.SUCCESS, GLib.Error())
 
 class WhiteBalanceBrush(Gimp.PlugIn):
     __gtype_name__ = "WhiteBalanceBrush"
@@ -319,6 +358,12 @@ class WhiteBalanceBrush(Gimp.PlugIn):
         )
         procedure.set_attribution("Jake Gustafson", "Jake Gustafson", "2025")
         procedure.add_menu_path("<Image>/Colors")  # Set parent
+
+        procedure.add_boolean_argument("enable_high", "Affect brightest", "Affect brightest", True, GObject.ParamFlags.READWRITE)
+        procedure.add_boolean_argument("enable_gamma", "Affect gamma (mid-level)", "Affect gamma (mid-level)", False, GObject.ParamFlags.READWRITE)
+        procedure.add_boolean_argument("enable_low", "Affect darkest", "Affect darkest", False, GObject.ParamFlags.READWRITE)
+        procedure.add_double_argument("amount", "Amount (1.0 to match brush value)", "Amount (1.0 to match brush value)", 0, 2.0, 1.0, GObject.ParamFlags.READWRITE)
+
         return procedure
 
 Gimp.main(WhiteBalanceBrush.__gtype__, sys.argv)
