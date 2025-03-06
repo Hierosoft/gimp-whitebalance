@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import logging
+# import numpy as np  # not in GIMP 3.0 RC2 AppImage
 import os
 import sys
 
@@ -27,7 +28,7 @@ MY_NAME = os.path.split(__file__)[1]
 logger = logging.getLogger(MY_NAME)  # Don't use __name__ since "__main__" run by GIMP
 
 
-def adjust_white_balance(image, drawable, add_undo=False, stretch_mode='add',
+def adjust_white_balance(image, drawable, stretch_mode="levels",
                          progress_portion=None, progress_offset=None):
     """Adjust white balance relative to the currently selected foreground color."""
     logger.info("adjust_white_balance...")
@@ -112,6 +113,7 @@ def adjust_white_balance(image, drawable, add_undo=False, stretch_mode='add',
         # <https://github.com/cam92473/diffuse-dwarf-detection/blob/cc5b4a9c2f45a50064087c3d800398d18aa52607/ALGORITHM/IMAGE_PROCESS/gimp_procedure/gimp_procedure.py#L199>:
         logger.info("procedure.create_config()...")
         config = procedure.create_config()
+        logger.info("config is a {}".format(type(config)))
         adjustments = (adjust_r, adjust_g, adjust_b)
 
         logger.info("adjustments={}".format(adjustments))
@@ -123,36 +125,107 @@ def adjust_white_balance(image, drawable, add_undo=False, stretch_mode='add',
             Gimp.HistogramChannel.BLUE,
         )
 
+        low_dist = target_gray
+        high_dist = 1.0 - target_gray
+
         scales = []
         for i in range(len(channels)):
             scales.append(target_gray / brush_rgba[i])
-
+        r_scale, g_scale, b_scale = scales
         ok_count = 0
-        # Doesn't work (does opposite)--reason unknown:
-        # for i in range(len(channels)):
-        #     adjust = adjustments[i]
-        #     channel = channels[i]
-        #     config.set_property('drawable', drawable)
-        #     config.set_property('channel', channel)
-        #     config.set_property('low-input', 0.0)
-        #     config.set_property('high-input', 1.0)
-        #     config.set_property('clamp-input', False)
-        #     config.set_property('gamma', 1.0)
-        #     config.set_property('low-output', 0.0)
-        #     config.set_property('high-output', 1.0 + adjust)
-        #     config.set_property('clamp-output', False)
-        #     logger.info("procedure.run(config)...")
-        #     result = procedure.run(config)
+        if stretch_mode == "levels":
+            for i in range(len(channels)):
+                adjust = adjustments[i]
+                channel = channels[i]
+                # print("dir(config)={}".format(dir(config)))
+                # ^ 'bind_property', 'bind_property_full', 'build_data_path', 'build_plug_in_path', 'build_system_path', 'build_writable_path', 'chain', 'compat_control', 'connect', 'connect_after', 'connect_data', 'connect_object', 'connect_object_after', 'deserialize_return', 'diff', 'disconnect', 'disconnect_by_func', 'emit', 'emit_stop_by_name', 'error_quark', 'find_property', 'force_floating', 'freeze_notify', 'g_type_instance', 'get_choice_id', 'get_color_array', 'get_core_object_array', 'get_data', 'get_procedure', 'get_properties', 'get_property', 'get_qdata', 'getv', 'handler_block', 'handler_block_by_func', 'handler_disconnect', 'handler_is_connected', 'handler_unblock', 'handler_unblock_by_func', 'install_properties', 'install_property', 'interface_find_property', 'interface_install_property', 'interface_list_properties', 'is_floating', 'list_properties', 'newv', 'notify', 'notify_by_pspec', 'override_property', 'param_spec_duplicate', 'parent_instance', 'props', 'qdata', 'ref', 'ref_count', 'ref_sink', 'replace_data', 'replace_qdata', 'reset_properties', 'reset_property', 'run_dispose', 'save_metadata', 'serialize_value', 'set_color_array', 'set_core_object_array', 'set_data', 'set_properties', 'set_property', 'steal_data', 'steal_qdata', 'stop_emission', 'stop_emission_by_name', 'string_append_escaped', 'sync', 'thaw_notify', 'type_register', 'unref', 'watch_closure', 'weak_ref'
+                # TODO: report issue: no __doc__ for get_properties
+                # print("config.list_properties()={}"
+                #       .format(config.list_properties()))
+                # ^ [<GParamObject 'procedure'>, <GParamObject 'drawable'>, <GParamEnum 'channel'>, <GParamDouble 'low-input'>, <GParamDouble 'high-input'>, <GParamBoolean 'clamp-input'>, <GParamDouble 'gamma'>, <GParamDouble 'low-output'>, <GParamDouble 'high-output'>, <GParamBoolean 'clamp-output'>]
+                config.set_property('drawable', drawable)
+                config.set_property('channel', channel)
+                config.set_property('low-input', 0.0)
+                config.set_property('high-input', 1.0)
+                config.set_property('clamp-input', False)
+                config.set_property('gamma', 1.0)
+                config.set_property('low-output', 0.0)
+                # config.set_property('gamma', 1.0 + adjust)  # bad with or without high-output change
+                config.set_property('high-output', 1.0 + adjust)
+                config.set_property('clamp-output', False)
+                logger.info("procedure.run(config)...")
+                result = procedure.run(config)
 
-        #     if result is None:
-        #         Gimp.message("Levels adjustment failed, no result returned.")
-        #         break
-        #     ok_count += 1
+                if result is None:
+                    Gimp.message("Levels adjustment failed, no result returned.")
+                    break
+                ok_count += 1
+                Gimp.progress_update(ok_count / len(channels))
         new_color = Gegl.Color.new("#FFFF")
         size = drawable.get_width(), drawable.get_height()
         w, h = size
         print("size={}".format(size))
+        new_rgba = [1.0, 1.0, 1.0, 1.0]
+        change_len = 3
+
+        def wb_pyramid(color):
+            r, g, b, a = color.get_rgba()
+            lightness = (r + g + b) / 3
+            amount = lightness / low_dist if (lightness <= target_gray) else ((1 - lightness) / high_dist)
+            new_color.set_rgba(
+                max(r + adjust_r * amount, 0),
+                max(g + adjust_g * amount, 0),
+                max(b + adjust_b * amount, 0),
+                a,
+            )
+            return new_color
+
+        def wb_proportional(color):
+            r, g, b, a = color.get_rgba()
+            lightness = (r + g + b) / 3
+            new_color.set_rgba(
+                max(r + adjust_r * lightness, 0),
+                max(g + adjust_g * lightness, 0),
+                max(b + adjust_b * lightness, 0),
+                a,
+            )
+            return new_color
+
+        def wb_multiply(color):
+            r, g, b, a = color.get_rgba()
+            new_color.set_rgba(
+                min(r * r_scale, 1.0),
+                min(g * g_scale, 1.0),
+                min(b * b_scale, 1.0),
+                a,
+            )
+
+        def wb_add(color):
+            r, g, b, a = color.get_rgba()
+            new_color.set_rgba(
+                max(r + adjust_r, 0),
+                max(g + adjust_g, 0),
+                max(b + adjust_b, 0),
+                a,
+            )
+            return new_color
+
+        wb_fns = {
+            "pyramid": wb_pyramid,
+            "proportional": wb_proportional,
+            "multiply": wb_multiply,
+            "add": wb_add,
+        }
+        wb_fn = wb_fns.get(stretch_mode)
         for y in range(h):
+            if stretch_mode == "levels":
+                Gimp.progress_update(1.0)
+                break  # already done using GIMP procedure above
+            elif wb_fn is None:
+                raise NotImplementedError(
+                    "stretch_mode {} without whitebalance function"
+                    " should skip drawing.".format(stretch_mode)
+                )
             ratio = y / h
             if progress_portion is not None:
                 ratio *= progress_portion
@@ -161,34 +234,7 @@ def adjust_white_balance(image, drawable, add_undo=False, stretch_mode='add',
             Gimp.progress_update(ratio)
             for x in range(w):
                 color = drawable.get_pixel(x, y)
-                rgba = color.get_rgba()  # returns _ResultTuple
-                new_rgba = []
-                lightness = (rgba[0] + rgba[1] + rgba[2]) / 3
-                for i in range(len(rgba)):
-                    if i < len(channels):
-                        if stretch_mode == "proportional":
-                            new_rgba.append(
-                                rgba[i]
-                                + adjustments[i] * lightness
-                            )
-                            if new_rgba[i] < 0:
-                                new_rgba[i] = 0
-                        elif stretch_mode == "multiply":
-                            new_rgba.append(rgba[i] * scales[i])
-                            if new_rgba[i] < 0:
-                                new_rgba[i] = 0
-                            elif new_rgba[i] > 1.0:
-                                new_rgba[i] = 1.0
-                        elif stretch_mode == "add":
-                            new_rgba.append(rgba[i] + adjustments[i])
-                            if new_rgba[i] < 0:
-                                new_rgba[i] = 0
-                        else:
-                            raise ValueError(
-                                "unknown stretch_mode={}".format(stretch_mode))
-                    else:  # keep existing alpha
-                        new_rgba.append(rgba[i])
-                new_color.set_rgba(new_rgba[0], new_rgba[1], new_rgba[2], new_rgba[3])
+                wb_fn(color)  # sets outer scope's new_color
                 drawable.set_pixel(x, y, new_color)
                 # logger.debug("{} became {}".format(rgba, new_rgba))
 
