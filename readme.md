@@ -2,9 +2,24 @@
 (not to be confused with [gimp-colortemp](https://github.com/Hierosoft/gimp-colortemp))
 
 
-## Documentation
+### GIMP 3
+The WIP Python version is the only GIMP 3 version for now.
 
-### Whitebalance
+#### Install
+- GIMP 3.0 plug-ins must be installed in their own folder with the same name as the script:
+  - Windows: `%APPDATA%\GIMP\3.0\plug-ins\whitebalance\whitebalance.py`
+  - Linux: `~/.config/GIMP/3.0/plug-ins/whitebalance/whitebalance.py`
+- Restart GIMP after installing or upgrading the script.
+- If it is installed, it will be under "Color", "White Balance from Brush" (enabled when an image is opened).
+
+#### Use
+- Load an image
+  - The image must be RGB or RGBA.
+- Use GIMP's eye dropper to click a gray area (Turn on the "average" option and set range to enough pixels to average any noise well).
+- "Color", "White Balance from Brush"
+
+
+### SCM (GIMP 2.x)
 >
 > **whitebalance** is a Gimp script for changing the white balance of images. This script-fu script can be used to convert the foreground color to either a neutral gray, or to the color of the background. The conversions are performed in the sRGB color space. In Gimp 2.4 and later, more colorspaces are supported, but the plugin has not yet been adapted to work with general colorspaces.
 >
